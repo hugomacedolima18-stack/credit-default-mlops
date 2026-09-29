@@ -140,7 +140,7 @@ credit-default-mlops/
 │   ├── evaluate.py           # metrics and plots
 │   ├── fairness.py           # fairness check per group (sex, age, marriage, education)
 │   ├── train.py              # train, log to MLflow, pick the best
-│   └── register_model.py     # Model Registry + @champion alias
+│   └── register_model.py     # Model Registry: Champion vs Challenger
 ├── api/
 │   ├── main.py               # FastAPI app
 │   └── schemas.py            # request / response validation
@@ -148,7 +148,8 @@ credit-default-mlops/
 │   ├── conftest.py           # synthetic test data
 │   ├── test_data.py
 │   ├── test_api.py
-│   └── test_fairness.py
+│   ├── test_fairness.py
+│   └── test_registry.py
 └── artifacts/.gitkeep        # plots and summaries appear here after training
 ```
 
@@ -197,9 +198,19 @@ A copy of the plots is also written to `./artifacts/` on your machine, plus `art
 
 ---
 
-## Model Registry
+## Model Registry - Champion vs Challenger
 
-After both runs finish, the model with the highest ROC-AUC is registered as **`credit_default_model`** and receives the alias **`@champion`**. Each retraining creates a new version and moves the alias. (Aliases replace the deprecated "Staging/Production" stages.)
+After both runs finish, the model with the highest ROC-AUC is registered as a new version of **`credit_default_model`**. This new version is the **challenger**. It is compared with the current **champion** (the version the API serves):
+
+| Situation | Decision |
+|---|---|
+| No champion yet | the challenger becomes **`@champion`** |
+| Challenger ROC-AUC **>** champion ROC-AUC | **promoted**: the `@champion` alias moves to the new version |
+| Otherwise (equal or worse) | **not promoted**: the new version gets **`@challenger`**, the old champion stays in production |
+
+So a bad retrain (e.g. on broken data) can never replace a better model automatically. The decision is written on each version (tag `promotion_decision` and description). The rule lives in `src/register_model.py` (`should_promote`) and is unit-tested in `tests/test_registry.py`. (Aliases replace the deprecated "Staging/Production" stages.)
+
+Retraining on the **same data** with the same seed gives the same score, so the new version is **not** promoted - that is expected.
 
 The API loads `models:/credit_default_model@champion`. If the alias is missing, it falls back to the **latest registered version**.
 
@@ -298,7 +309,7 @@ docker compose down -v       # stops containers AND DELETES the MLflow data
 ### Retraining
 
 ```bash
-docker compose --profile train run --rm trainer          # creates new runs + a new model version
+docker compose --profile train run --rm trainer          # new runs + a new version (champion only if better)
 curl -X POST http://localhost:8000/reload
 ```
 

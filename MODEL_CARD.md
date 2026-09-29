@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Model name** | `credit_default_model` (MLflow Model Registry, alias `@champion`) |
-| **Current champion** | Random Forest, version 1 |
+| **Current champion** | Random Forest (ROC-AUC 0.775). Promotion rule: a new version becomes `@champion` only if its ROC-AUC beats the current champion (`src/register_model.py`) |
 | **Owners** | Fabrício Olo, Hugo Lima, Maria Teresa Neves, Olívia Rua, Pedro Martim Lota |
 | **Status** | Academic prototype (Porto Business School, MLOps mini-project, Oct 2026) |
 | **Code** | `src/train.py` (training), `src/fairness.py` (fairness check), `api/main.py` (serving) |

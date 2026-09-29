@@ -9,8 +9,9 @@ What happens:
 1. Load the data and create a stratified train/test split.
 2. Train Logistic Regression and Random Forest. Each one gets its own MLflow Run
    with parameters, metrics, plots, a JSON summary and the model itself.
-3. Compare the runs on ROC-AUC and register the winner as
-   `credit_default_model` with alias `champion`.
+3. Compare the runs on ROC-AUC and register the winner as a new version
+   (the challenger). It only becomes `@champion` if it beats the current
+   champion (see src/register_model.py).
 """
 
 import json
@@ -219,7 +220,7 @@ def main() -> None:
     plot_roc_comparison(results, y_test, config.ARTIFACTS_DIR / "roc_comparison.png")
 
     # ---- Register the winner -------------------------------------------------
-    version = register_best_model(
+    registry = register_best_model(
         model_uri=best["model_uri"],
         run_id=best["run_id"],
         model_type=best_name,
@@ -231,7 +232,11 @@ def main() -> None:
     for metric in ["roc_auc", "recall", "precision", "f1", "accuracy"]:
         print(f"{metric:<12}" + "".join(f"{r['metrics'][metric]:>22.4f}" for r in results.values()))
     print("==================================================")
-    print(f"Registered '{config.REGISTERED_MODEL_NAME}' version {version} ({best_name}).")
+    print(f"Registered '{config.REGISTERED_MODEL_NAME}' version {registry['version']} ({best_name}).")
+    print(f"Champion vs Challenger: {registry['decision']}.")
+    print(f"The API serves version {registry['champion_version']} (@{config.MODEL_ALIAS}).")
+    if registry["promoted"]:
+        print("If the API is running, load the new champion with: POST /reload")
     print("Open MLflow at http://localhost:5000 to explore the runs.")
 
 
