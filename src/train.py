@@ -31,6 +31,7 @@ from src.evaluate import (
     plot_roc_comparison,
     plot_roc_curve,
 )
+from src.fairness import fairness_report, plot_fairness, save_report, summary_metrics
 from src.features import build_model_pipeline
 from src.register_model import register_best_model
 
@@ -120,6 +121,24 @@ def train_and_log_model(model_name, estimator, X_train, X_test, y_train, y_test)
         for plot_path in plots:
             mlflow.log_artifact(str(plot_path), artifact_path="plots")
 
+        # ---- Fairness check (governance evidence) ----------------------------
+        # Same metrics, but per group (sex, age band, marriage, education).
+        # Ratios below 0.8 are listed in "needs_review" for a human to check.
+        fairness = fairness_report(X_test, y_test, y_pred)
+        mlflow.log_metrics(summary_metrics(fairness))
+        mlflow.log_artifact(
+            str(save_report(fairness, run_artifacts_dir / "fairness_report.json")),
+            artifact_path="fairness",
+        )
+        mlflow.log_artifact(
+            str(plot_fairness(
+                fairness, f"Fairness by group - {pretty_name}",
+                run_artifacts_dir / "fairness_by_group.png",
+            )),
+            artifact_path="fairness",
+        )
+        mlflow.set_tag("fairness_needs_review", ", ".join(fairness["needs_review"]) or "none")
+
         summary = {
             "model_type": model_name,
             "run_id": run.info.run_id,
@@ -128,6 +147,7 @@ def train_and_log_model(model_name, estimator, X_train, X_test, y_train, y_test)
             "threshold": config.CLASSIFICATION_THRESHOLD,
             "train_default_rate": float(y_train.mean()),
             "test_default_rate": float(y_test.mean()),
+            "fairness_needs_review": fairness["needs_review"],
             "note": "Academic decision-support prototype. Not for automated credit decisions.",
         }
         summary_path = run_artifacts_dir / "run_summary.json"
@@ -152,6 +172,7 @@ def train_and_log_model(model_name, estimator, X_train, X_test, y_train, y_test)
         mlflow.set_tags({"project": "credit-default-mlops", "stage": "baseline"})
 
         print(f"[train] {model_name:<20} " + "  ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
+        print(f"[fairness] {model_name:<17} needs review: {fairness['needs_review'] or 'none'}")
 
         return {
             "run_id": run.info.run_id,

@@ -54,11 +54,11 @@ nano .env        # fill in KAGGLE_API_TOKEN=...   (save: Ctrl+O, Enter, Ctrl+X)
 3. Download (inside Docker, no local Python needed):
 
 ```bash
-docker compose run --rm trainer python -m src.download_data
+docker compose --profile train run --rm trainer python -m src.download_data
 ls data/raw
 ```
 
-You can also skip step 3: `docker compose run --rm trainer` downloads the CSV automatically when it is missing and a token is present. The code (`src/download_data.py`) also accepts the older `KAGGLE_USERNAME` + `KAGGLE_KEY` values from `kaggle.json`.
+You can also skip step 3: `docker compose --profile train run --rm trainer` downloads the CSV automatically when it is missing and a token is present. The code (`src/download_data.py`) also accepts the older `KAGGLE_USERNAME` + `KAGGLE_KEY` values from `kaggle.json`.
 
 `.env` holds a secret: it is in `.gitignore` and must never be committed. Only `.env.example` (empty) goes to Git.
 
@@ -121,6 +121,7 @@ Containers talk to MLflow at `http://mlflow:5000`; your browser uses `http://loc
 ```
 credit-default-mlops/
 ├── README.md
+├── MODEL_CARD.md             # governance: purpose, limits, performance, fairness
 ├── requirements.txt          # pinned Python dependencies
 ├── pytest.ini                # test settings
 ├── .gitignore
@@ -137,6 +138,7 @@ credit-default-mlops/
 │   ├── download_data.py      # optional: get the CSV via the Kaggle API
 │   ├── features.py           # derived features + preprocessing pipeline
 │   ├── evaluate.py           # metrics and plots
+│   ├── fairness.py           # fairness check per group (sex, age, marriage, education)
 │   ├── train.py              # train, log to MLflow, pick the best
 │   └── register_model.py     # Model Registry + @champion alias
 ├── api/
@@ -145,7 +147,8 @@ credit-default-mlops/
 ├── tests/
 │   ├── conftest.py           # synthetic test data
 │   ├── test_data.py
-│   └── test_api.py
+│   ├── test_api.py
+│   └── test_fairness.py
 └── artifacts/.gitkeep        # plots and summaries appear here after training
 ```
 
@@ -183,10 +186,10 @@ Experiment name: **`credit-default-risk`**. Every `python -m src.train` creates 
 | Logged | Content |
 |---|---|
 | Parameters | model type, hyperparameters, random state, test size, stratification, class weighting, threshold |
-| Metrics | accuracy, precision, recall, f1, roc_auc |
-| Artifacts | `plots/confusion_matrix.png`, `plots/roc_curve.png`, `plots/precision_recall_curve.png`, `summary/run_summary.json` |
+| Metrics | accuracy, precision, recall, f1, roc_auc, `fairness_*_ratio` (one per attribute and metric) |
+| Artifacts | `plots/confusion_matrix.png`, `plots/roc_curve.png`, `plots/precision_recall_curve.png`, `summary/run_summary.json`, `fairness/fairness_report.json`, `fairness/fairness_by_group.png` |
 | Model | the full scikit-learn pipeline (MLflow sklearn flavor) |
-| Tags | `selected_as_champion = true/false` |
+| Tags | `selected_as_champion = true/false`, `fairness_needs_review` |
 
 MLflow uses a **SQLite** database for metadata and a folder for artifacts, both stored in the Docker volume `mlflow_data`, so nothing is lost when containers restart.
 
@@ -242,7 +245,7 @@ The trainer has the Compose profile `train`, so `docker compose up` does not sta
 ### 1. Get the code
 
 ```bash
-git clone <YOUR_REPOSITORY_URL> credit-default-mlops
+git clone https://github.com/hugomacedolima18-stack/credit-default-mlops.git
 cd credit-default-mlops
 ```
 
@@ -271,7 +274,7 @@ Wait until `credit-mlflow` shows `healthy`, then open **<http://localhost:5000>*
 ### 5. Train the models
 
 ```bash
-docker compose run --rm trainer
+docker compose --profile train run --rm trainer
 ```
 
 You will see a comparison table at the end and `Registered 'credit_default_model' version 1`.
@@ -295,7 +298,7 @@ docker compose down -v       # stops containers AND DELETES the MLflow data
 ### Retraining
 
 ```bash
-docker compose run --rm trainer          # creates new runs + a new model version
+docker compose --profile train run --rm trainer          # creates new runs + a new model version
 curl -X POST http://localhost:8000/reload
 ```
 
@@ -352,7 +355,7 @@ The tests use a small **synthetic** dataset, so they need neither the Kaggle fil
 With Docker:
 
 ```bash
-docker compose run --rm trainer pytest
+docker compose --profile train run --rm trainer pytest
 ```
 
 Locally:
@@ -364,6 +367,19 @@ pytest
 They check that the dataset loads, the target is detected under its different names, `ID` is removed, the split is stratified, the derived features are correct, `/health` returns 200, `/predict` returns the expected fields, invalid input returns 422 and a missing model returns 503.
 
 **Bonus - CI:** `.github/workflows/ci.yml` runs the tests and builds the Docker image on every push to GitHub.
+
+---
+
+## Fairness Check & Model Card
+
+Credit scoring is **high-risk under the EU AI Act**, so every training run also checks whether the model works equally well for different groups (`src/fairness.py`):
+
+- Groups: **SEX**, **AGE** band (<30, 30-39, 40-49, 50+), **MARRIAGE**, **EDUCATION**.
+- Per group: **recall** (defaulters caught), **false positive rate** (good customers wrongly flagged), **flag rate**.
+- Comparison: *ratio = lowest / highest*. **80% rule:** a ratio below 0.8 is listed in `fairness_needs_review` for a human to check. Groups with fewer than 30 cases for a metric are not compared.
+- Everything is logged to MLflow (artifacts in `fairness/`, metrics `fairness_*_ratio`).
+
+Result for the champion: **sex and age pass**; **education and marital status need review** (e.g. high-school customers get more false alarms than graduate-school customers). Details and next steps are in **[MODEL_CARD.md](MODEL_CARD.md)**.
 
 ---
 
@@ -383,7 +399,7 @@ They check that the dataset loads, the target is detected under its different na
 - Data from Taiwan in 2005: it does not represent today's customers or other countries.
 - Only two baseline models, with no hyperparameter tuning.
 - Fixed threshold of 0.5, not optimised for business costs.
-- No fairness metrics computed yet, and no probability calibration.
+- No probability calibration.
 - One train/test split (no cross-validation).
 - MLflow uses SQLite and has no authentication: fine for a laptop, not for production.
 - No monitoring of predictions or data drift after deployment.
@@ -394,7 +410,7 @@ They check that the dataset loads, the target is detected under its different na
 
 - Cross-validation and hyperparameter tuning (tracked in MLflow).
 - Choose the threshold with the business, based on the cost of false negatives versus false positives.
-- Fairness report per group and explainability (SHAP) logged as MLflow artifacts.
+- Retrain without sensitive attributes and compare the fairness gaps; explainability (SHAP) as an MLflow artifact.
 - Probability calibration.
 - Data validation of incoming requests and drift monitoring (e.g. Evidently).
 - A simple Streamlit front-end for analysts.
