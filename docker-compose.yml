@@ -1,0 +1,74 @@
+# Three services, one shared image (built from the Dockerfile):
+#
+#   mlflow  - MLflow tracking server + Model Registry  -> http://localhost:5000
+#   trainer - trains the models once, logs to MLflow, registers the best, exits
+#   api     - FastAPI prediction service               -> http://localhost:8000
+#
+# Docker Compose creates a private network, so the containers reach MLflow
+# at http://mlflow:5000 (the service name is the host name).
+
+services:
+  mlflow:
+    build: .
+    image: credit-default-mlops:latest
+    container_name: credit-mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --workers 1
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --artifacts-destination /mlflow/artifacts
+      --serve-artifacts
+      --allowed-hosts "mlflow,mlflow:5000,localhost,localhost:5000,127.0.0.1,127.0.0.1:5000"
+    ports:
+      - "5000:5000"
+    volumes:
+      # Named volume: runs, metrics, registry and model files survive restarts.
+      - mlflow_data:/mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  trainer:
+    build: .
+    image: credit-default-mlops:latest
+    container_name: credit-trainer
+    # The "train" profile means `docker compose up` does NOT start it;
+    # run it on demand with: docker compose run --rm trainer
+    profiles: ["train"]
+    command: ["python", "-m", "src.train"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      DATA_PATH: /app/data/raw/default_credit_card_clients.csv
+      # Optional: Kaggle credentials read from the .env file (see README).
+      KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN:-}
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
+      KAGGLE_KEY: ${KAGGLE_KEY:-}
+    volumes:
+      - ./data:/app/data             # the Kaggle CSV (downloads are saved here too)
+      - ./artifacts:/app/artifacts   # plots + summaries appear on your machine
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  api:
+    build: .
+    image: credit-default-mlops:latest
+    container_name: credit-api
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "8000:8000"
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mlflow_data:

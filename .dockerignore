@@ -1,0 +1,19 @@
+# Keep the Docker image small: data and outputs are mounted, not copied.
+.git
+.github
+data/raw/*
+artifacts/*
+mlruns/
+mlartifacts/
+*.db
+notebooks/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+.env.*
+kaggle.json
+.DS_Store
